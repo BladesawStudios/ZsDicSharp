@@ -1,0 +1,16 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZsDicSharp", "src\ZsDicSharp\ZsDicSharp.csproj", "{3A9C1E77-8B24-4F05-B6D3-19E7C240A85F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3A9C1E77-8B24-4F05-B6D3-19E7C240A85F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A9C1E77-8B24-4F05-B6D3-19E7C240A85F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A9C1E77-8B24-4F05-B6D3-19E7C240A85F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A9C1E77-8B24-4F05-B6D3-19E7C240A85F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
