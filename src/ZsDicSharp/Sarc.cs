@@ -2,15 +2,6 @@ using System.Buffers.Binary;
 
 namespace ZsDicSharp;
 
-/// <summary>
-/// Just enough SARC to get the dictionaries out of the pack that holds them.
-/// </summary>
-/// <remarks>
-/// The node table, the name table and the file bytes, and nothing else. This is here only to
-/// break the bootstrap - the dictionaries live inside an archive, and that archive is the one
-/// thing compressed without them. Anything that wants SARC for its own sake should have a
-/// reader of its own rather than reach for this one.
-/// </remarks>
 internal static class Sarc
 {
     public static List<(string Name, byte[] Bytes)> Read(byte[] d)
@@ -22,7 +13,7 @@ internal static class Sarc
         ushort U16(int o) => BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(o));
 
         int dataOffset = U32(0x0C);
-        int sfat = U16(0x04);                     // the SARC header's own length
+        int sfat = U16(0x04);
         int nodeCount = U16(sfat + 0x06);
         int nodes = sfat + 0x0C;
         int names = nodes + nodeCount * 0x10 + 0x08;
