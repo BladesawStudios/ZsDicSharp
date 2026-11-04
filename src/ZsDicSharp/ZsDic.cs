@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using ZstdSharp;
 
 namespace ZsDicSharp;
@@ -15,39 +16,49 @@ public enum ZsDictionary
 
 public sealed class ZsDic : IDisposable
 {
-    private const string DictionaryPack = "Pack/ZsDic.pack.zs";
+    private const string DictionaryPack = "Pack/ZsDic.pack";
+
+    private const uint DictionaryMagic = 0xEC30A437;
 
     /// <summary>The level TKVSC's Python backend compressed at.</summary>
     public const int DefaultLevel = 16;
 
     private readonly byte[]?[] _dictionaries = new byte[]?[4];
 
+    private readonly Dictionary<uint, byte[]> _byId = [];
+
     // Keyed by dictionary and, for compressors, level. The dictionary bytes decide which ZsDic a cached
     // object came from, so each instance keeps its own.
     [ThreadStatic] private static Dictionary<(ZsDic, ZsDictionary), Decompressor>? _decompressors;
     [ThreadStatic] private static Dictionary<(ZsDic, ZsDictionary, int), Compressor>? _compressors;
+    [ThreadStatic] private static Dictionary<(ZsDic, uint), Decompressor>? _decompressorsById;
 
     private ZsDic() { }
 
     public static ZsDic FromRomfs(string romfs)
     {
         string path = Path.Combine(romfs, DictionaryPack.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(path))
+        string? found = new[] { path + ".zs", path }.FirstOrDefault(File.Exists);
+        if (found is null)
             throw new FileNotFoundException(
-                $"No dictionary pack at {path}. Without it only dictionary-less files can be read; " +
+                $"No dictionary pack at {path}[.zs]. Without it only dictionary-less files can be read; " +
                 $"use {nameof(Dictionaryless)} if that is what you want.", path);
 
-        return FromPack(File.ReadAllBytes(path));
+        return FromPack(File.ReadAllBytes(found));
     }
 
     public static ZsDic FromPack(ReadOnlySpan<byte> pack)
     {
         ZsDic dic = new();
 
-        byte[] sarc = dic.Decompress(pack, ZsDictionary.None);
+        byte[] sarc = IsCompressed(pack) ? dic.Decompress(pack, ZsDictionary.None) : pack.ToArray();
 
         foreach ((string name, byte[] bytes) in Sarc.Read(sarc))
         {
+            if (bytes.Length >= 8 && BinaryPrimitives.ReadUInt32LittleEndian(bytes) == DictionaryMagic
+                && BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4)) is not 0 and var id)
+                dic._byId[id] = bytes;
+
             ZsDictionary? which = name switch
             {
                 "zs.zsdic" => ZsDictionary.Common,
@@ -80,14 +91,36 @@ public sealed class ZsDic : IDisposable
     }
 
     public byte[] DecompressFile(string path)
-        => Decompress(File.ReadAllBytes(path), DictionaryFor(path));
+        => Decompress(File.ReadAllBytes(path), path);
+
+    /// <summary>The dictionary id a zstd frame's header names, or 0 when it names none.</summary>
+    public static uint FrameDictionaryId(ReadOnlySpan<byte> frame)
+    {
+        if (!IsCompressed(frame) || frame.Length < 5) return 0;
+
+        byte descriptor = frame[4];
+        int at = (descriptor & 0x20) != 0 ? 5 : 6;
+
+        return (descriptor & 3) switch
+        {
+            1 when frame.Length >= at + 1 => frame[at],
+            2 when frame.Length >= at + 2 => BinaryPrimitives.ReadUInt16LittleEndian(frame[at..]),
+            3 when frame.Length >= at + 4 => BinaryPrimitives.ReadUInt32LittleEndian(frame[at..]),
+            _ => 0,
+        };
+    }
 
     /// <summary>
-    /// Decompresses with the dictionary the path's name calls for. A file that doesn't follow the naming is
-    /// tried against the common dictionary, and a <c>.pack.zs</c> against the pack dictionary, before giving up.
+    /// Decompresses with the dictionary the frame's header names. A frame naming none this pack holds falls back
+    /// to the path's name: a file that doesn't follow the naming is tried against the common dictionary, and a
+    /// <c>.pack.zs</c> against the pack dictionary, before giving up.
     /// </summary>
     public byte[] Decompress(ReadOnlySpan<byte> data, string path)
     {
+        uint id = FrameDictionaryId(data);
+        if (_byId.TryGetValue(id, out byte[]? named))
+            return ForId(id, named).Unwrap(data).ToArray();
+
         ZsDictionary primary = DictionaryFor(path);
         try
         {
@@ -156,9 +189,24 @@ public sealed class ZsDic : IDisposable
         return _decompressors[(this, dictionary)] = made;
     }
 
+    private Decompressor ForId(uint id, byte[] bytes)
+    {
+        _decompressorsById ??= [];
+
+        if (_decompressorsById.TryGetValue((this, id), out Decompressor? existing)) return existing;
+
+        Decompressor made = new();
+        made.LoadDictionary(bytes);
+
+        return _decompressorsById[(this, id)] = made;
+    }
+
     public void Dispose()
     {
         System.Array.Clear(_dictionaries);
+        _byId.Clear();
+        if (_decompressorsById is not null)
+            foreach (var key in _decompressorsById.Keys.Where(k => k.Item1 == this).ToList()) _decompressorsById.Remove(key);
         if (_decompressors is not null)
             foreach (var key in _decompressors.Keys.Where(k => k.Item1 == this).ToList()) _decompressors.Remove(key);
         if (_compressors is not null)
