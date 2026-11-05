@@ -27,11 +27,15 @@ public sealed class ZsDic : IDisposable
 
     private readonly Dictionary<uint, byte[]> _byId = [];
 
+    // Dictionaries past the three every game has, by the name before ".zsdic": files ending ".<name>.zs" use them.
+    private readonly Dictionary<string, byte[]> _extra = new(StringComparer.OrdinalIgnoreCase);
+
     // Keyed by dictionary and, for compressors, level. The dictionary bytes decide which ZsDic a cached
     // object came from, so each instance keeps its own.
     [ThreadStatic] private static Dictionary<(ZsDic, ZsDictionary), Decompressor>? _decompressors;
     [ThreadStatic] private static Dictionary<(ZsDic, ZsDictionary, int), Compressor>? _compressors;
     [ThreadStatic] private static Dictionary<(ZsDic, uint), Decompressor>? _decompressorsById;
+    [ThreadStatic] private static Dictionary<(ZsDic, string, int), Compressor>? _extraCompressors;
 
     private ZsDic() { }
 
@@ -68,6 +72,7 @@ public sealed class ZsDic : IDisposable
             };
 
             if (which is { } key) dic._dictionaries[(int)key] = bytes;
+            else if (name.EndsWith(".zsdic", StringComparison.OrdinalIgnoreCase)) dic._extra[name[..^".zsdic".Length]] = bytes;
         }
 
         return dic;
@@ -142,7 +147,32 @@ public sealed class ZsDic : IDisposable
 
     /// <summary>Compresses a file for <paramref name="path"/> with the dictionary its name calls for.</summary>
     public byte[] Compress(ReadOnlySpan<byte> data, string path, int level = DefaultLevel)
-        => Compress(data, DictionaryFor(path), level);
+    {
+        if (ExtraNameFor(path) is not { } extra) return Compress(data, DictionaryFor(path), level);
+
+        _extraCompressors ??= [];
+        if (!_extraCompressors.TryGetValue((this, extra, level), out Compressor? compressor))
+        {
+            compressor = new Compressor(level);
+            compressor.LoadDictionary(_extra[extra]);
+            _extraCompressors[(this, extra, level)] = compressor;
+        }
+
+        return compressor.Wrap(data).ToArray();
+    }
+
+    // The longest extra dictionary name the file's name ends in, followed by ".zs".
+    private string? ExtraNameFor(string path)
+    {
+        string name = Path.GetFileName(path);
+        if (!name.EndsWith(".zs", StringComparison.OrdinalIgnoreCase)) return null;
+
+        string? best = null;
+        foreach (string extra in _extra.Keys)
+            if ((best is null || extra.Length > best.Length) && name.EndsWith($".{extra}.zs", StringComparison.OrdinalIgnoreCase))
+                best = extra;
+        return best;
+    }
 
     public byte[] Compress(ReadOnlySpan<byte> data, ZsDictionary dictionary, int level = DefaultLevel)
     {
@@ -205,10 +235,13 @@ public sealed class ZsDic : IDisposable
     {
         System.Array.Clear(_dictionaries);
         _byId.Clear();
+        _extra.Clear();
         if (_decompressorsById is not null)
             foreach (var key in _decompressorsById.Keys.Where(k => k.Item1 == this).ToList()) _decompressorsById.Remove(key);
         if (_decompressors is not null)
             foreach (var key in _decompressors.Keys.Where(k => k.Item1 == this).ToList()) _decompressors.Remove(key);
+        if (_extraCompressors is not null)
+            foreach (var key in _extraCompressors.Keys.Where(k => k.Item1 == this).ToList()) _extraCompressors.Remove(key);
         if (_compressors is not null)
             foreach (var key in _compressors.Keys.Where(k => k.Item1 == this).ToList()) _compressors.Remove(key);
     }

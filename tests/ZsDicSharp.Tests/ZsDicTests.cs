@@ -86,6 +86,21 @@ public class ZsDicTests
     }
 
     [Fact]
+    public void AnExtraDictionaryIsUsedForFilesNamedAfterIt()
+    {
+        byte[] common = Trained(4), probe = Trained(5);
+        using ZsDic zs = ZsDic.FromPack(Pack(("zs.zsdic", common), ("bkprb.zsdic", probe)));
+        byte[] data = Sample();
+
+        byte[] probeFile = zs.Compress(data, "Bake/Probe/X0_Y0.bkprb.zs");
+        byte[] otherFile = zs.Compress(data, "Model/Thing.bfres.zs");
+
+        Assert.Equal(BitConverter.ToUInt32(probe, 4), ZsDic.FrameDictionaryId(probeFile));
+        Assert.Equal(BitConverter.ToUInt32(common, 4), ZsDic.FrameDictionaryId(otherFile));
+        Assert.Equal(data, zs.Decompress(probeFile, "Bake/Probe/X0_Y0.bkprb.zs"));
+    }
+
+    [Fact]
     public void ACompressedPackAndItsNamesStillWork()
     {
         byte[] dictionary = Trained(3);
