@@ -222,4 +222,44 @@ public class ZsDicTests
             Assert.Equal(plain, zs.Decompress(zs.Compress(plain, file), file));
         }
     }
+
+    [Fact]
+    public void ByIdIntoABufferRoundTripsAndNamesTheDictionary()
+    {
+        byte[] dictionary = Trained(3);
+        uint id = BitConverter.ToUInt32(dictionary, 4);
+        using ZsDic zs = ZsDic.FromPack(Pack(("any.zsdic", dictionary)));
+        byte[] data = Encoding.ASCII.GetBytes("word and word and word and more words than that");
+
+        byte[] packed = new byte[Compressor.GetCompressBound(data.Length)];
+        int packedLength = zs.Compress(data, packed, id);
+
+        Assert.Equal(id, ZsDic.FrameDictionaryId(packed.AsSpan(0, packedLength)));
+
+        byte[] unpacked = new byte[data.Length];
+        Assert.Equal(data.Length, zs.Decompress(packed.AsSpan(0, packedLength), unpacked));
+        Assert.Equal(data, unpacked);
+    }
+
+    [Fact]
+    public void ByIdZeroMeansNoDictionary()
+    {
+        using ZsDic zs = ZsDic.Dictionaryless();
+        byte[] data = Encoding.ASCII.GetBytes("plain data, no dictionary at all");
+
+        byte[] packed = new byte[Compressor.GetCompressBound(data.Length)];
+        int packedLength = zs.Compress(data, packed, 0);
+        Assert.Equal(0u, ZsDic.FrameDictionaryId(packed.AsSpan(0, packedLength)));
+
+        byte[] unpacked = new byte[data.Length];
+        zs.Decompress(packed.AsSpan(0, packedLength), unpacked);
+        Assert.Equal(data, unpacked);
+    }
+
+    [Fact]
+    public void AnIdThePackDoesNotHoldIsAnError()
+    {
+        using ZsDic zs = ZsDic.Dictionaryless();
+        Assert.Throws<InvalidOperationException>(() => zs.Compress("data"u8, new byte[64], 0x1234));
+    }
 }

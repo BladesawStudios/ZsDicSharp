@@ -20,22 +20,19 @@ public sealed class ZsDic : IDisposable
 
     private const uint DictionaryMagic = 0xEC30A437;
 
-    /// <summary>The level TKVSC's Python backend compressed at.</summary>
     public const int DefaultLevel = 16;
 
     private readonly byte[]?[] _dictionaries = new byte[]?[4];
 
     private readonly Dictionary<uint, byte[]> _byId = [];
 
-    // Dictionaries past the three every game has, by the name before ".zsdic": files ending ".<name>.zs" use them.
     private readonly Dictionary<string, byte[]> _extra = new(StringComparer.OrdinalIgnoreCase);
 
-    // Keyed by dictionary and, for compressors, level. The dictionary bytes decide which ZsDic a cached
-    // object came from, so each instance keeps its own.
     [ThreadStatic] private static Dictionary<(ZsDic, ZsDictionary), Decompressor>? _decompressors;
     [ThreadStatic] private static Dictionary<(ZsDic, ZsDictionary, int), Compressor>? _compressors;
     [ThreadStatic] private static Dictionary<(ZsDic, uint), Decompressor>? _decompressorsById;
     [ThreadStatic] private static Dictionary<(ZsDic, string, int), Compressor>? _extraCompressors;
+    [ThreadStatic] private static Dictionary<(ZsDic, uint, int), Compressor>? _compressorsById;
 
     private ZsDic() { }
 
@@ -98,7 +95,6 @@ public sealed class ZsDic : IDisposable
     public byte[] DecompressFile(string path)
         => Decompress(File.ReadAllBytes(path), path);
 
-    /// <summary>The dictionary id a zstd frame's header names, or 0 when it names none.</summary>
     public static uint FrameDictionaryId(ReadOnlySpan<byte> frame)
     {
         if (!IsCompressed(frame) || frame.Length < 5) return 0;
@@ -115,11 +111,6 @@ public sealed class ZsDic : IDisposable
         };
     }
 
-    /// <summary>
-    /// Decompresses with the dictionary the frame's header names. A frame naming none this pack holds falls back
-    /// to the path's name: a file that doesn't follow the naming is tried against the common dictionary, and a
-    /// <c>.pack.zs</c> against the pack dictionary, before giving up.
-    /// </summary>
     public byte[] Decompress(ReadOnlySpan<byte> data, string path)
     {
         uint id = FrameDictionaryId(data);
@@ -145,7 +136,6 @@ public sealed class ZsDic : IDisposable
         }
     }
 
-    /// <summary>Compresses a file for <paramref name="path"/> with the dictionary its name calls for.</summary>
     public byte[] Compress(ReadOnlySpan<byte> data, string path, int level = DefaultLevel)
     {
         if (ExtraNameFor(path) is not { } extra) return Compress(data, DictionaryFor(path), level);
@@ -161,7 +151,54 @@ public sealed class ZsDic : IDisposable
         return compressor.Wrap(data).ToArray();
     }
 
-    // The longest extra dictionary name the file's name ends in, followed by ".zs".
+    public int Decompress(ReadOnlySpan<byte> data, Span<byte> destination)
+    {
+        uint id = FrameDictionaryId(data);
+
+        if (id ==0)
+        {
+            Decompressor plain = For(ZsDictionary.None, null);
+            return plain.Unwrap(data, destination);
+        }
+
+        if (!_byId.TryGetValue(id, out byte[]? dictionary))
+        {
+            throw new InvalidOperationException($"The frame names dictionary {id:X8}, which this pack does not contain!");
+        }
+
+        Decompressor decompressor = ForId(id, dictionary);
+        return decompressor.Unwrap(data, destination);
+    }
+
+    public int Compress(ReadOnlySpan<byte> data, Span<byte> destination, uint dictionaryId, int level = DefaultLevel)
+{
+    if (dictionaryId != 0 && !_byId.ContainsKey(dictionaryId))
+    {
+        throw new InvalidOperationException($"Dictionary {dictionaryId:X8} was not loaded; build this from a romfs to get it.");
+    }
+
+    if (_compressorsById == null)
+    {
+        _compressorsById = new Dictionary<(ZsDic, uint, int), Compressor>();
+    }
+
+    var key = (this, dictionaryId, level);
+
+    if (!_compressorsById.TryGetValue(key, out Compressor? compressor))
+    {
+        compressor = new Compressor(level);
+
+        if (dictionaryId != 0)
+        {
+            compressor.LoadDictionary(_byId[dictionaryId]);
+        }
+
+        _compressorsById[key] = compressor;
+    }
+
+    return compressor.Wrap(data, destination);
+}
+
     private string? ExtraNameFor(string path)
     {
         string name = Path.GetFileName(path);
@@ -244,5 +281,7 @@ public sealed class ZsDic : IDisposable
             foreach (var key in _extraCompressors.Keys.Where(k => k.Item1 == this).ToList()) _extraCompressors.Remove(key);
         if (_compressors is not null)
             foreach (var key in _compressors.Keys.Where(k => k.Item1 == this).ToList()) _compressors.Remove(key);
+        if (_compressorsById is not null)
+            foreach (var key in _compressorsById.Keys.Where(k => k.Item1 == this).ToList()) _compressorsById.Remove(key);
     }
 }
